@@ -495,13 +495,6 @@ jobs:
       - name: Initialize Config Fragment
         run: touch "${{ github.workspace }}/wild_gki.fragment"
 
-      - name: Apply Kernel Bypass Hack
-        if: ${{ inputs.allow_version_mismatch == true || inputs.allow_version_mismatch == 'true' }}
-        uses: ./.github/actions/bypass-kernel
-        with:
-          version: ${{ inputs.version }}
-          allow_version_mismatch: true
-
       - name: Build Normal Kernel
         env:
           SOURCE_DATE_EPOCH: ${{ env.SOURCE_DATE_EPOCH }}
@@ -512,6 +505,49 @@ jobs:
         with:
           version: ${{ inputs.version }}
           page_size: ${{ inputs.page_size }}
+          bypass: "false"
+
+      - name: Build Bypass Kernel
+        if: ${{ inputs.allow_version_mismatch == true || inputs.allow_version_mismatch == 'true' }}
+        env:
+          SOURCE_DATE_EPOCH: ${{ env.SOURCE_DATE_EPOCH }}
+          KBUILD_BUILD_TIMESTAMP: ${{ env.KBUILD_BUILD_TIMESTAMP }}
+          KBUILD_BUILD_USER: ${{ (inputs.version == 'android15-6.6' || inputs.version == 'android16-6.12' || inputs.version == 'android17-6.18') && 'kleaf' || 'build-user' }}
+          KBUILD_BUILD_HOST: build-host
+        uses: ./.github/actions/build-kernel
+        with:
+          version: ${{ inputs.version }}
+          page_size: ${{ inputs.page_size }}
+          bypass: "true"
+
+      - name: Patch AnyKernel3 for Bypass
+        if: ${{ inputs.allow_version_mismatch == true || inputs.allow_version_mismatch == 'true' }}
+        shell: bash
+        working-directory: ${{ github.workspace }}/AnyKernel3
+        run: |
+          set -euo pipefail
+          grep -q '^do.flash_bypass=' anykernel.sh || sed -i "/^'; } # end properties$/i\\
+          do.flash_bypass=0" anykernel.sh
+          python3 - <<'PYEOF'
+          s = open('tools/ak3-core.sh').read()
+          anchor = 'setup_ak;\n\ndo_check_boot_version;'
+          assert anchor in s, 'anchor not found in tools/ak3-core.sh'
+          block = '''setup_ak;
+
+          if [ "$(file_getprop $AKHOME/anykernel.sh do.flash_bypass 2>/dev/null)" = "1" ]; then
+            if [ -f "$AKHOME/Bypass-Image" ]; then
+              mv -f "$AKHOME/Bypass-Image" "$AKHOME/Image"
+              ui_print " " "  -> do.flash_bypass=1: flashing Bypass-Image"
+            else
+              abort "do.flash_bypass=1 but Bypass-Image not found in zip"
+            fi
+          fi
+
+          do_check_boot_version;'''
+          s = s.replace(anchor, block, 1)
+          open('tools/ak3-core.sh', 'w').write(s)
+          PYEOF
+          grep -n 'do.flash_bypass' anykernel.sh tools/ak3-core.sh
 
       - name: Consolidated Build Summary
         id: build-summary
