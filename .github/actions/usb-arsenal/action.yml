@@ -77,26 +77,47 @@ runs:
         # the patch's added lines against the tree and reports "already present".
         CHECK="${{ github.workspace }}/.github/scripts/usb_arsenal_already_present.py"
 
+        APPLIED=0
+        SKIPPED=0
+        FAILED=()
+
         for p in "${PATCHES[@]}"; do
           name="$(basename "$p")"
           # git apply keeps the tree clean and is what these patches were exported
           # for; patch -p1 is the fallback for a hunk git refuses on whitespace.
           if git apply --check "$p" 2>/dev/null; then
             git apply "$p"
+            APPLIED=$((APPLIED + 1))
             echo "  applied (git apply): $name"
           elif python3 "$CHECK" "$p"; then
+            SKIPPED=$((SKIPPED + 1))
             echo "  skipped (already in this tree): $name"
           elif patch -p1 --forward --dry-run -f < "$p" >/dev/null 2>&1; then
             patch -p1 --forward -f < "$p" >/dev/null
+            APPLIED=$((APPLIED + 1))
             echo "  applied (patch -p1): $name"
           else
-            echo "ERROR: could not apply $name to this tree" >&2
-            git apply --check -v "$p" 2>&1 | head -20 >&2 || true
-            exit 1
+            FAILED+=("$name")
+            echo "  NOT APPLIED: $name"
+            git apply --check -v "$p" 2>&1 | head -6 | sed 's/^/    /' || true
           fi
         done
 
-        echo "USB-Arsenal: ${#PATCHES[@]} patch(es) applied"
+        echo "USB-Arsenal: ${APPLIED} applied, ${SKIPPED} already present, ${#FAILED[@]} not applied"
+
+        # These patches are hardening and feature add-ons (upstream's own table:
+        # DVD images over 2.36G, HID cdev lifetime, bInterval attribute). None of
+        # them is required to create a gadget - the configs below are. A patch cut
+        # against a vendor tree therefore should not fail the whole build, but it
+        # must not pass silently either, and a set that applies *nothing* means
+        # the mapping is wrong.
+        if [ "${#FAILED[@]}" -gt 0 ]; then
+          echo "::warning title=USB-Arsenal patches::${#FAILED[@]} patch(es) did not apply to ${{ inputs.version }}: ${FAILED[*]}. Gadget configs are still enabled; the affected optional support is absent."
+        fi
+        if [ "$APPLIED" -eq 0 ] && [ "$SKIPPED" -eq 0 ]; then
+          echo "ERROR: no USB-Arsenal patch applied to ${{ inputs.version }} - the ${PATCH_DIR} mapping is wrong" >&2
+          exit 1
+        fi
 
     - name: Enable USB Arsenal kernel configs
       uses: ./.github/actions/set-kernel-config
