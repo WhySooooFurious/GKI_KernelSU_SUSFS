@@ -405,6 +405,16 @@ jobs:
           os_patch_level: ${{ inputs.os_patch_level }}
           droidspaces_commit: ${{ inputs.droidspaces_commit }}
 
+      - name: USB Arsenal Patches
+        # USB gadget functions (mass storage, HID, NCM) plus the kernel-patches
+        # folder that makes a second gadget instance and CD-ROM/DVD emulation work.
+        # 6.1 has no patch set of its own upstream, so it takes the 5.15 one.
+        if: contains(inputs.feature_set, 'USBA') || inputs.feature_set == 'All'
+        uses: ./.github/actions/usb-arsenal
+        with:
+          version: ${{ inputs.version }}
+          kernel_version: ${{ inputs.kernel_version }}
+
       - name: Apply NTSync Patches
         if: contains(inputs.feature_set, 'NTSync')
         uses: ./.github/actions/ntsync
